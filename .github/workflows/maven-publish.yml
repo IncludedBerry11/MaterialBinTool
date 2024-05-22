@@ -1,34 +1,68 @@
-# This workflow will build a package using Maven and then publish it to GitHub packages when a release is created
-# For more information see: https://github.com/actions/setup-java/blob/main/docs/advanced-usage.md#apache-maven-with-a-settings-path
+# build-and-publish.yml
 
-name: Maven Package
+name: build and publish
 
 on:
-  release:
-    types: [created]
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*.*.*' # We will publish new version for tag which follows 'v*.*.*' format
+
+env:
+  SERVICE_NAME: hello-world
 
 jobs:
-  build:
+  verification:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout local repository
+        uses: actions/checkout@v3
+        with:
+          path: ${{ github.workspace }}/${{ env.SERVICE_NAME }}
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin' # Here we are using temurin java distribution but can be customized depends on the requirement
+          java-version: '17' # Here we are using java 17 but can be customized depends on the requirement
+          cache: 'gradle' # Here are enabling gradle cache to cache gradle wrappers, dependencies etc. It can be disabled by simply removing the line
+      - name: Run all tests
+        run: ./gradlew clean check --no-daemon
+        working-directory: ${{ github.workspace }}/${{ env.SERVICE_NAME }}/
+      
+  determine_should_publish_new_version: # Publish new version for new tags
+    runs-on: ubuntu-22.04
+    outputs:
+      PUBLISH_NEW_VERSION: ${{ steps.determine_should_publish_new_version.outputs.PUBLISH_NEW_VERSION }}
+    steps:
+      - name: Checkout local repository
+        uses: actions/checkout@v3
+      - name: Determine should publish docker image
+        id: determine_should_publish_new_version
+        run: |
+          PUBLISH_NEW_VERSION=false
+          if [[ $(git tag --points-at HEAD) != '' ]]; then
+            PUBLISH_NEW_VERSION=true
+          fi
+          echo "PUBLISH_NEW_VERSION=${PUBLISH_NEW_VERSION}" >> $GITHUB_OUTPUT
 
-    runs-on: ubuntu-latest
+  publish-jar:
+    runs-on: ubuntu-22.04
+    needs: [ determine_should_publish_new_version, verification ]
+    if: ${{ needs.determine_should_publish_new_version.outputs.PUBLISH_NEW_VERSION == 'true' }}
     permissions:
       contents: read
       packages: write
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK 11
-      uses: actions/setup-java@v3
-      with:
-        java-version: '11'
-        distribution: 'temurin'
-        server-id: github # Value of the distributionManagement/repository/id field of the pom.xml
-        settings-path: ${{ github.workspace }} # location for the settings.xml file
-
-    - name: Build with Maven
-      run: mvn -B package --file pom.xml
-
-    - name: Publish to GitHub Packages Apache Maven
-      run: mvn deploy -s $GITHUB_WORKSPACE/settings.xml
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
+      - name: Checkout local repository
+        uses: actions/checkout@v3
+        with:
+          path: ${{ github.workspace }}/${{ env.SERVICE_NAME }}
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+      - name: Publish jar
+        run: ./gradlew publish --no-daemon
+        working-directory: ${{ github.workspace }}/${{ env.SERVICE_NAME }}/
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
